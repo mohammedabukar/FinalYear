@@ -10,7 +10,7 @@ Adafruit_MPU6050 mpu;
 #define MOTOR_PIN 5
 
 const float swingThreshold = 0.5;   // rad/s threshold for swing detection
-const int hazardThreshold = 50;    // cm
+const int hazardThreshold = 100;    // cm
 const float alpha = 0.98;          // Complementary filter coefficient
 
 float angle = 0.0;                 // Estimated roll angle
