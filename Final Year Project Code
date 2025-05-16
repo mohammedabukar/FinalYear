@@ -1,9 +1,20 @@
+#include <Wire.h>
+#include <Adafruit_MPU6050.h>
+#include <Adafruit_Sensor.h>
+
+Adafruit_MPU6050 mpu;
+
 #define TRIG_PIN 9
 #define ECHO_PIN 8
 #define BUZZER_PIN 6
 #define MOTOR_PIN 5
 
-const int hazardThreshold = 50;  // cm
+const float swingThreshold = 0.5;   // rad/s threshold for swing detection
+const int hazardThreshold = 50;    // cm
+const float alpha = 0.98;          // Complementary filter coefficient
+
+float angle = 0.0;                 // Estimated roll angle
+unsigned long prevTime = 0;
 
 void setup() {
   Serial.begin(9600);
@@ -13,9 +24,21 @@ void setup() {
   pinMode(BUZZER_PIN, OUTPUT);
   pinMode(MOTOR_PIN, OUTPUT);
 
-  // Ensure outputs start LOW
   digitalWrite(BUZZER_PIN, LOW);
   digitalWrite(MOTOR_PIN, LOW);
+
+  // Initialise MPU6050
+  if (!mpu.begin()) {
+    Serial.println("Failed to find MPU6050 chip");
+    while (1) delay(10);
+  }
+
+  mpu.setAccelerometerRange(MPU6050_RANGE_8_G);
+  mpu.setGyroRange(MPU6050_RANGE_500_DEG);
+  mpu.setFilterBandwidth(MPU6050_BAND_21_HZ);
+
+  delay(100);
+  prevTime = millis();
 }
 
 float getDistanceCM() {
@@ -25,29 +48,48 @@ float getDistanceCM() {
   delayMicroseconds(10);
   digitalWrite(TRIG_PIN, LOW);
 
-  long duration = pulseIn(ECHO_PIN, HIGH, 30000); // timeout after 30ms
-  if (duration == 0) return -1;  // No object detected
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  if (duration == 0) return -1;
 
   float distance = duration * 0.034 / 2;
   return distance;
 }
 
 void loop() {
-  float distance = getDistanceCM();
+  sensors_event_t a, g, temp;
+  mpu.getEvent(&a, &g, &temp);
 
-  Serial.print("Distance: ");
-  Serial.print(distance);
-  Serial.println(" cm");
+  // Complementary filter: estimate roll angle
+  float accAngle = atan2(a.acceleration.y, a.acceleration.z) * 180 / PI;
 
-  if (distance > 0 && distance < hazardThreshold) {
-    // Hazard detected
-    digitalWrite(BUZZER_PIN, LOW);
-    digitalWrite(MOTOR_PIN, HIGH);
+  unsigned long currTime = millis();
+  float dt = (currTime - prevTime) / 1000.0;
+  prevTime = currTime;
+
+  angle = alpha * (angle + g.gyro.x * dt * (180 / PI)) + (1 - alpha) * accAngle;
+
+  // Check for swing phase using angular velocity
+  if (abs(g.gyro.x) > swingThreshold) {
+    float distance = getDistanceCM();
+    Serial.print("Swing detected | Distance: ");
+    Serial.print(distance);
+    Serial.print(" cm | Roll: ");
+    Serial.println(angle);
+
+    if (distance > 0 && distance < hazardThreshold) {
+      digitalWrite(BUZZER_PIN, LOW);
+      digitalWrite(MOTOR_PIN, HIGH);
+    } else {
+      digitalWrite(BUZZER_PIN, HIGH);
+      digitalWrite(MOTOR_PIN, LOW);
+    }
   } else {
-    // No hazard
+    // Stance phase: turn off output
     digitalWrite(BUZZER_PIN, HIGH);
     digitalWrite(MOTOR_PIN, LOW);
+    Serial.println("Stance phase - sensor idle");
   }
 
-  delay(200);  // Adjust for responsiveness
+  delay(20);  // Fast loop for responsiveness
 }
+
